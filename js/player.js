@@ -215,36 +215,63 @@ export class Player {
   }
 
   _moveAndCollide(dt, buildSystem) {
-    // Horizontal
+    const STEP_UP = 0.6;
+
+    // ── HORIZONTAL MOVEMENT with step-up ───────────────────────────────
+    const tryHoriz = (nx, nz) => {
+      const testLow = new THREE.Vector3(nx, this.position.y, nz);
+      if (!this._collides(testLow, buildSystem)) {
+        this.position.x = nx;
+        this.position.z = nz;
+        return true;
+      }
+      // Blocked — try stepping up onto a low obstacle
+      const newSupport = this._supportHeightAt(nx, nz, buildSystem);
+      const lift = newSupport - this.position.y;
+      if (lift > 0 && lift < STEP_UP) {
+        const testHigh = new THREE.Vector3(nx, newSupport + 0.01, nz);
+        if (!this._collides(testHigh, buildSystem)) {
+          this.position.x = nx;
+          this.position.z = nz;
+          this.position.y = newSupport + 0.01;
+          return true;
+        }
+      }
+      return false;
+    };
+
     const nextX = this.position.x + this.velocity.x * dt;
+    tryHoriz(nextX, this.position.z);
+
     const nextZ = this.position.z + this.velocity.z * dt;
+    tryHoriz(this.position.x, nextZ);
 
-    const testX = new THREE.Vector3(nextX, this.position.y, this.position.z);
-    if (!this._collides(testX, buildSystem)) this.position.x = nextX;
+    // ── VERTICAL MOVEMENT ──────────────────────────────────────────────
+    let nextY = this.position.y + this.velocity.y * dt;
 
-    const testZ = new THREE.Vector3(this.position.x, this.position.y, nextZ);
-    if (!this._collides(testZ, buildSystem)) this.position.z = nextZ;
-
-    // Vertical
-    const nextY = this.position.y + this.velocity.y * dt;
-    const testY = new THREE.Vector3(this.position.x, nextY, this.position.z);
-
-    if (this._collides(testY, buildSystem) && this.velocity.y <= 0) {
-      this.velocity.y = 0;
-      this.onGround = true;
-    } else if (this._collides(testY, buildSystem) && this.velocity.y > 0) {
-      this.velocity.y = 0;
-    } else {
-      this.position.y = nextY;
-      this.onGround = false;
+    if (this.velocity.y > 0) {
+      // Jumping up — check for ceiling
+      const test = new THREE.Vector3(this.position.x, nextY, this.position.z);
+      if (this._collides(test, buildSystem)) {
+        this.velocity.y = 0;
+        nextY = this.position.y;
+      }
     }
+    this.position.y = nextY;
 
-    // Ground clamp
-    const g = this.world.groundHeight(this.position.x, this.position.z);
-    if (this.position.y < g) {
-      this.position.y = g;
+    // Ground snap: land on top of whatever surface is under us.
+    const supportY = this._supportHeightAt(this.position.x, this.position.z, buildSystem);
+    if (this.position.y < supportY) {
+      this.position.y = supportY;
+      if (this.velocity.y < 0) this.velocity.y = 0;
+      this.onGround = true;
+    } else if (this.velocity.y <= 0 && this.position.y - supportY < 0.02) {
+      // Already touching — stay grounded
+      this.position.y = supportY;
       this.velocity.y = 0;
       this.onGround = true;
+    } else {
+      this.onGround = false;
     }
 
     // Map bounds
@@ -255,23 +282,75 @@ export class Player {
     if (this.position.z < -s) this.position.z = -s;
   }
 
+  /**
+   * Returns the highest walkable surface at (x, z): terrain, static
+   * collider tops, or build tops (including ramps via their slope
+   * function). Only considers surfaces that are reachable from the
+   * player's current Y (i.e. within STEP_UP above), so a floor far
+   * above the player does not get treated as support.
+   */
+  _supportHeightAt(x, z, buildSystem) {
+    const r = PLAYER_RADIUS;
+    const STEP_UP = 0.6;
+    const maxReach = this.position.y + STEP_UP;
+    let best = this.world.groundHeight(x, z);
+
+    const footprintOverlaps = (c) =>
+      x + r >= c.min.x && x - r <= c.max.x &&
+      z + r >= c.min.z && z - r <= c.max.z;
+
+    const consider = (topY) => {
+      if (topY > maxReach) return;
+      if (topY > best) best = topY;
+    };
+
+    for (const c of this.world.staticColliders) {
+      if (footprintOverlaps(c)) consider(c.max.y);
+    }
+    for (const b of buildSystem.placed) {
+      if (!footprintOverlaps(b)) continue;
+      if (b.kind === 'ramp') {
+        const surf = buildSystem.rampSurfaceHeight(b, x, z);
+        if (surf !== null) consider(surf);
+      } else {
+        consider(b.max.y);
+      }
+    }
+    return best;
+  }
+
   _collides(pos, buildSystem) {
     const r = PLAYER_RADIUS;
     const h = this.hitboxHeight;
-    const minP = { x: pos.x - r, y: pos.y,     z: pos.z - r };
-    const maxP = { x: pos.x + r, y: pos.y + h, z: pos.z + r };
+    const EPS = 0.001;
+    const minP = { x: pos.x - r, y: pos.y + EPS,     z: pos.z - r };
+    const maxP = { x: pos.x + r, y: pos.y + h - EPS, z: pos.z + r };
+
+    const overlap = (min, max) =>
+      !(maxP.x <= min.x || minP.x >= max.x) &&
+      !(maxP.y <= min.y || minP.y >= max.y) &&
+      !(maxP.z <= min.z || minP.z >= max.z);
 
     for (const c of this.world.staticColliders) {
-      if (maxP.x < c.min.x || minP.x > c.max.x) continue;
-      if (maxP.y < c.min.y || minP.y > c.max.y) continue;
-      if (maxP.z < c.min.z || minP.z > c.max.z) continue;
-      return true;
+      if (overlap(c.min, c.max)) return true;
     }
     for (const b of buildSystem.placed) {
-      if (maxP.x < b.min.x || minP.x > b.max.x) continue;
-      if (maxP.y < b.min.y || minP.y > b.max.y) continue;
-      if (maxP.z < b.min.z || minP.z > b.max.z) continue;
-      return true;
+      // Horizontal AABB test (cheap reject, using >= so touching is OK)
+      if (maxP.x <= b.min.x || minP.x >= b.max.x) continue;
+      if (maxP.z <= b.min.z || minP.z >= b.max.z) continue;
+
+      if (b.kind === 'ramp') {
+        // Ramps are walkable slopes: collision only if the player's
+        // body clips BELOW the slope surface (can't walk through the
+        // underside of the ramp).
+        const surfY = buildSystem.rampSurfaceHeight(b, pos.x, pos.z);
+        if (surfY !== null && minP.y + 0.01 < surfY && maxP.y > b.min.y) {
+          return true;
+        }
+      } else {
+        if (maxP.y <= b.min.y || minP.y >= b.max.y) continue;
+        return true;
+      }
     }
     return false;
   }
