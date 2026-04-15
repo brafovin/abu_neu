@@ -26,6 +26,8 @@ export class Game {
 
     this.scene  = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 400);
+    // Camera must be in the scene so viewmodel children render
+    this.scene.add(this.camera);
     this._resize();
 
     // Entities
@@ -46,6 +48,8 @@ export class Game {
       mouseDY: 0,
       mouseDown: false,
     };
+    // Faction counter used for free-for-all bot factions
+    this._nextFactionId = 0;
     this._bindInput();
 
     // mode setup
@@ -68,15 +72,23 @@ export class Game {
       if (this.stopped) return;
       this.input.keys[e.code] = true;
 
+      // Weapons
       if (e.code === 'Digit1') this._selectWeapon('pistol');
       if (e.code === 'Digit2') this._selectWeapon('rifle');
+      if (e.code === 'KeyQ')   this._selectWeapon('shotgun');   // Pumpgun
       if (e.code === 'Digit3') this._selectWeapon('shotgun');
       if (e.code === 'Digit4') this._selectWeapon('sniper');
       if (e.code === 'Digit5') this._selectWeapon('pickaxe');
-      if (e.code === 'KeyQ')   this._selectBuild('wall');
-      if (e.code === 'KeyF')   this._selectBuild('floor');
-      if (e.code === 'KeyC')   this._selectBuild('ramp');
-      if (e.code === 'KeyG')   this._selectBuild(this.player.currentBuild ? null : 'wall');
+
+      // Builds
+      if (e.code === 'KeyE') this._selectBuild('wall');
+      if (e.code === 'KeyF') this._selectBuild('floor');
+      if (e.code === 'KeyC') this._selectBuild('ramp');
+      if (e.code === 'KeyV') this._selectBuild('roof');
+
+      // Crouch
+      if (e.code === 'KeyG') this.player.setCrouch(!this.player.crouching);
+
       if (e.code === 'KeyR')   this.player.reload();
       if (e.code === 'Escape') this.togglePause();
 
@@ -94,10 +106,13 @@ export class Game {
         return;
       }
       if (e.button === 0) this.input.mouseDown = true;
+      if (e.button === 2) this.player.setAim(true);
     };
     const mouseup = (e) => {
       if (e.button === 0) this.input.mouseDown = false;
+      if (e.button === 2) this.player.setAim(false);
     };
+    const contextmenu = (e) => e.preventDefault();
     const mousemove = (e) => {
       if (document.pointerLockElement !== this.canvas) return;
       this.input.mouseDX += e.movementX || 0;
@@ -118,6 +133,7 @@ export class Game {
     window.addEventListener('mouseup',   mouseup);
     window.addEventListener('mousemove', mousemove);
     this.canvas.addEventListener('wheel', wheel, { passive: true });
+    this.canvas.addEventListener('contextmenu', contextmenu);
 
     this._unbindInput = () => {
       window.removeEventListener('keydown', keydown);
@@ -126,6 +142,7 @@ export class Game {
       window.removeEventListener('mouseup',   mouseup);
       window.removeEventListener('mousemove', mousemove);
       this.canvas.removeEventListener('wheel', wheel);
+      this.canvas.removeEventListener('contextmenu', contextmenu);
     };
   }
 
@@ -141,21 +158,31 @@ export class Game {
 
   _configureMode() {
     this.wave = 0;
+    // Player faction
+    this.player.faction = 'player';
+
     if (this.mode === 'solo') {
-      for (let i = 0; i < 9; i++) this._spawnEnemy(1);
+      // Battle royale style: every bot is their own faction → they
+      // fight each other AND the player.
+      this.ffa = true;
+      for (let i = 0; i < 9; i++) this._spawnEnemy(0.9);
       this.victoryCondition = () => this.bots.every(b => !b.alive);
     } else if (this.mode === 'waves') {
+      // Enemies share one faction, so they don't team-kill in waves.
+      this.ffa = false;
       this._spawnWave();
       this.victoryCondition = () => false;
     } else if (this.mode === 'sandbox') {
+      this.ffa = true;
       this.player.wood = 9999;
       this.player.maxShield = 100;
       this.player.shield = 100;
-      for (let i = 0; i < 3; i++) this._spawnEnemy(0.8);
+      for (let i = 0; i < 3; i++) this._spawnEnemy(0.7);
       this.victoryCondition = () => false;
     } else if (this.mode === 'tdm') {
+      this.ffa = false;
       for (let i = 0; i < 2; i++) this._spawnAlly();
-      for (let i = 0; i < 4; i++) this._spawnEnemy(1.1);
+      for (let i = 0; i < 4; i++) this._spawnEnemy(1.0);
       this.teamKills = 0;
       this.enemyKills = 0;
       this.victoryCondition = () => this.teamKills >= 20 || this.enemyKills >= 20;
@@ -166,17 +193,20 @@ export class Game {
     this.wave++;
     const count = 3 + this.wave * 2;
     for (let i = 0; i < count; i++) {
-      this._spawnEnemy(1 + this.wave * 0.15);
+      this._spawnEnemy(0.9 + this.wave * 0.12);
     }
     this._pushKillFeed(`Welle ${this.wave} beginnt!`);
   }
 
   _spawnEnemy(difficulty) {
     const b = new Bot(this.scene, this.world, 'enemy', difficulty);
+    // Faction: unique in FFA, shared 'enemy' otherwise.
+    b.faction = this.ffa ? `ffa_${this._nextFactionId++}` : 'enemy';
     this.bots.push(b);
   }
   _spawnAlly() {
     const b = new Bot(this.scene, this.world, 'ally', 1.0);
+    b.faction = 'player';   // same team as the player
     // spawn near player
     const px = this.player.position.x;
     const pz = this.player.position.z;
@@ -275,33 +305,43 @@ export class Game {
   }
 
   _findTargetFor(bot) {
-    if (bot.team === 'enemy') {
-      // prefer player, otherwise any ally
-      const candidates = [this.player].concat(this.allyBots).filter(t => t && t.alive);
-      if (!candidates.length) return null;
-      return nearest(bot.position, candidates);
-    } else {
-      const candidates = this.bots.filter(b => b.alive);
-      if (!candidates.length) return null;
-      return nearest(bot.position, candidates);
+    // Any alive entity of a different faction is a target.
+    const candidates = [];
+    if (this.player.alive && this.player.faction !== bot.faction) {
+      candidates.push(this.player);
     }
+    for (const b of this.bots) {
+      if (b === bot || !b.alive) continue;
+      if (b.faction !== bot.faction) candidates.push(b);
+    }
+    for (const b of this.allyBots) {
+      if (b === bot || !b.alive) continue;
+      if (b.faction !== bot.faction) candidates.push(b);
+    }
+    if (!candidates.length) return null;
+    return nearest(bot.position, candidates);
   }
 
   _fireHitscan(origin, dir, wDef, shooter) {
     // Draw tracer
     this._spawnTracer(origin, dir, wDef);
 
-    // Collect candidate targets that are NOT shooter
+    const shooterFaction = shooter && shooter.faction;
+
+    // Collect candidate targets that are NOT shooter and NOT same faction
     const targets = [];
-    if (shooter !== this.player && this.player.alive) {
+    if (shooter !== this.player && this.player.alive &&
+        this.player.faction !== shooterFaction) {
       targets.push({ kind: 'player', obj: this.player, aabb: playerAABB(this.player) });
     }
     for (const b of this.bots) {
       if (!b.alive || b === shooter) continue;
+      if (b.faction === shooterFaction) continue;
       targets.push({ kind: 'bot', obj: b, aabb: b.getAABB() });
     }
     for (const b of this.allyBots) {
       if (!b.alive || b === shooter) continue;
+      if (b.faction === shooterFaction) continue;
       targets.push({ kind: 'ally', obj: b, aabb: b.getAABB() });
     }
 
@@ -312,9 +352,6 @@ export class Game {
     for (const t of targets) {
       const hitT = rayVsAABB(origin, dir, t.aabb.min, t.aabb.max);
       if (hitT !== null && hitT < bestT) {
-        // friendly fire skip: enemies shouldn't hurt enemies, allies shouldn't hurt allies
-        if (shooter && shooter.team === 'enemy' && t.kind === 'bot') continue;
-        if (shooter && shooter.team === 'ally' && (t.kind === 'ally' || t.kind === 'player')) continue;
         bestT = hitT;
         bestHit = { type: 'target', target: t };
       }
@@ -339,7 +376,9 @@ export class Game {
     if (bestHit.type === 'target') {
       const obj = bestHit.target.obj;
       let dmg = wDef.damage;
-      // headshot bonus (very rough: if hit Y is above 1.4 local)
+      // Tone down damage when a bot hits the player so you don't melt
+      if (shooter !== this.player && obj === this.player) dmg *= 0.55;
+      // headshot bonus
       const hitY = origin.y + dir.y * bestT;
       const head = obj.eyePos ? obj.eyePos.y : obj.position.y + 1.5;
       if (Math.abs(hitY - head) < 0.35) dmg *= 1.8;
@@ -356,18 +395,41 @@ export class Game {
           this.player.kills++;
           if (this.mode === 'tdm') this.teamKills++;
         }
-        if (obj.team === 'enemy' && shooter && shooter.team === 'ally') {
-          if (this.mode === 'tdm') this.teamKills++;
+        if (this.mode === 'tdm' && shooter && shooter.faction === 'player'
+            && obj.team === 'enemy') {
+          this.teamKills++;
         }
-        if (obj === this.player && shooter && shooter.team === 'enemy' && this.mode === 'tdm') {
+        if (this.mode === 'tdm' && obj === this.player) {
           this.enemyKills++;
         }
       }
     } else if (bestHit.type === 'collider') {
       const reward = this.world.hitCollider(bestHit.collider, wDef.damage);
-      if (reward > 0 && shooter === this.player) this.player.addWood(reward);
+      if (reward > 0 && shooter === this.player) {
+        this.player.addWood(reward);
+        // Loot crate drops bonus
+        if (bestHit.collider.loot) {
+          this._grantLoot(bestHit.collider.loot);
+          this._pushKillFeed('Kiste geöffnet!');
+        }
+      }
     } else if (bestHit.type === 'build') {
       this.builds.damage(bestHit.build, wDef.damage);
+    }
+  }
+
+  _grantLoot(kind) {
+    if (kind === 'shield') {
+      this.player.shield = Math.min(this.player.maxShield, this.player.shield + 40);
+    } else if (kind === 'health') {
+      this.player.health = Math.min(this.player.maxHealth, this.player.health + 40);
+    } else if (kind === 'ammo') {
+      // refill reserve for all weapons
+      for (const k of Object.keys(this.player.inventory)) {
+        this.player.inventory[k].reserve += 40;
+      }
+    } else if (kind === 'wood') {
+      this.player.addWood(80);
     }
   }
 
@@ -465,11 +527,11 @@ export class Game {
       pistol: 1, rifle: 2, shotgun: 3, sniper: 4, pickaxe: 5,
     };
     if (this.player.currentBuild) {
-      const b = { wall: 6, floor: 7, ramp: 8 }[this.player.currentBuild];
-      if (b) slots[b - 1].classList.add('active');
+      const b = { wall: 6, floor: 7, ramp: 8, roof: 9 }[this.player.currentBuild];
+      if (b && slots[b - 1]) slots[b - 1].classList.add('active');
     } else {
       const idx = map[this.player.currentWeapon];
-      if (idx) slots[idx - 1].classList.add('active');
+      if (idx && slots[idx - 1]) slots[idx - 1].classList.add('active');
     }
   }
 }

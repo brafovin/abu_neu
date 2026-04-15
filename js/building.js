@@ -33,10 +33,9 @@ export class BuildSystem {
   _setPreviewGeo(kind) {
     let geo;
     if (kind === 'wall')  geo = new THREE.BoxGeometry(GRID, GRID, WALL_THICK);
-    if (kind === 'floor') geo = new THREE.BoxGeometry(GRID, FLOOR_THICK, GRID);
-    if (kind === 'ramp') {
-      geo = new THREE.BoxGeometry(GRID, GRID, WALL_THICK);
-    }
+    if (kind === 'floor' || kind === 'roof')
+                           geo = new THREE.BoxGeometry(GRID, FLOOR_THICK, GRID);
+    if (kind === 'ramp')   geo = new THREE.BoxGeometry(GRID, GRID, WALL_THICK);
     if (this.previewMesh.geometry) this.previewMesh.geometry.dispose();
     this.previewMesh.geometry = geo;
   }
@@ -57,6 +56,9 @@ export class BuildSystem {
     let cy;
     if (kind === 'floor') {
       cy = this._snap(pos.y);
+    } else if (kind === 'roof') {
+      // place a ceiling above ground height
+      cy = this.world.groundHeight(cx, cz) + GRID;
     } else {
       // wall/ramp: anchor to ground at its base
       const groundY = this.world.groundHeight(cx, cz);
@@ -107,7 +109,8 @@ export class BuildSystem {
 
   _halfExtents(kind) {
     if (kind === 'wall')  return new THREE.Vector3(GRID/2, GRID/2, WALL_THICK);
-    if (kind === 'floor') return new THREE.Vector3(GRID/2, FLOOR_THICK, GRID/2);
+    if (kind === 'floor' || kind === 'roof')
+                          return new THREE.Vector3(GRID/2, FLOOR_THICK, GRID/2);
     if (kind === 'ramp')  return new THREE.Vector3(GRID/2, GRID/2, WALL_THICK);
     return new THREE.Vector3();
   }
@@ -127,7 +130,7 @@ export class BuildSystem {
       const yaw = Math.round(player.yaw / (Math.PI/2)) * (Math.PI/2);
       mesh.rotation.y = yaw;
     }
-    if (kind === 'floor') {
+    if (kind === 'floor' || kind === 'roof') {
       geo = new THREE.BoxGeometry(GRID, FLOOR_THICK, GRID);
       mesh = new THREE.Mesh(geo, mat);
     }
@@ -144,7 +147,7 @@ export class BuildSystem {
 
     // AABB (worst-case axis-aligned for collision simplicity)
     const worldHalf = new THREE.Vector3(GRID/2, GRID/2, GRID/2);
-    if (kind === 'floor') worldHalf.y = FLOOR_THICK;
+    if (kind === 'floor' || kind === 'roof') worldHalf.y = FLOOR_THICK;
 
     const entry = {
       min: c.clone().sub(worldHalf),

@@ -17,6 +17,7 @@ export class World {
     this._scatterTrees(60);
     this._scatterRocks(25);
     this._buildStructures(4);
+    this._scatterLootCrates(14);
     this._buildBoundary();
   }
 
@@ -155,6 +156,59 @@ export class World {
         max: box.position.clone().add(half),
         destructible: false,
         mesh: box,
+      });
+    }
+  }
+
+  _scatterLootCrates(n) {
+    const types = ['shield', 'health', 'ammo', 'wood'];
+    const colors = {
+      shield: 0x4fc3f7,
+      health: 0xef5350,
+      ammo:   0xffd54f,
+      wood:   0xa0744a,
+    };
+
+    for (let i = 0; i < n; i++) {
+      const x = (Math.random() - 0.5) * (this.size - 30);
+      const z = (Math.random() - 0.5) * (this.size - 30);
+      const y = this.groundHeight(x, z);
+      const loot = types[Math.floor(Math.random() * types.length)];
+
+      const group = new THREE.Group();
+
+      const box = new THREE.Mesh(
+        new THREE.BoxGeometry(1.4, 1.2, 1.4),
+        new THREE.MeshLambertMaterial({ color: 0x9c6a3a })
+      );
+      box.position.y = 0.6;
+      group.add(box);
+
+      // colored top "lid" hinting the loot type
+      const lid = new THREE.Mesh(
+        new THREE.BoxGeometry(1.5, 0.18, 1.5),
+        new THREE.MeshLambertMaterial({
+          color: colors[loot],
+          emissive: colors[loot],
+          emissiveIntensity: 0.4,
+        })
+      );
+      lid.position.y = 1.25;
+      group.add(lid);
+
+      group.position.set(x, y, z);
+      this.scene.add(group);
+
+      const half = new THREE.Vector3(0.8, 0.8, 0.8);
+      const centre = new THREE.Vector3(x, y + 0.7, z);
+      this.staticColliders.push({
+        min: centre.clone().sub(half),
+        max: centre.clone().add(half),
+        destructible: true,
+        hp: 40,
+        reward: 15,
+        loot,                    // marker used by game.js
+        mesh: group,
       });
     }
   }

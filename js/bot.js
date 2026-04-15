@@ -21,6 +21,7 @@ export class Bot {
     this.scene = scene;
     this.world = world;
     this.team  = team;                 // 'enemy' | 'ally'
+    this.faction = team;               // overridden by game (FFA / TDM)
     this.difficulty = difficulty;      // scales aim / reaction
     this.alive = true;
     this.name = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
@@ -30,12 +31,13 @@ export class Bot {
 
     this.state = 'patrol';
     this.target = null;
+    this.targetSeenAt = 0;             // ms first time current target was spotted
     this.lastFire = 0;
     this.patrolTarget = new THREE.Vector3();
     this.nextPatrolPick = 0;
 
-    // assign a weapon
-    const pool = ['pistol', 'rifle', 'shotgun', 'sniper'];
+    // assign a weapon (bias towards weaker so the player has a chance)
+    const pool = ['pistol', 'pistol', 'rifle', 'shotgun', 'sniper'];
     this.weaponKey = pool[Math.floor(Math.random() * pool.length)];
     this.ammo = WEAPONS[this.weaponKey].clip;
     this.reloadUntil = 0;
@@ -135,12 +137,16 @@ export class Bot {
       canSee = this._visibleTo(this.target, obstacles);
     }
 
+    const now = performance.now();
     if (this.target && canSee) {
+      if (this.state !== 'attack') this.targetSeenAt = now;
       this.state = 'attack';
     } else if (this.target) {
       this.state = 'chase';
+      this.targetSeenAt = 0;
     } else {
       this.state = 'patrol';
+      this.targetSeenAt = 0;
     }
 
     // Motion desire
@@ -202,16 +208,19 @@ export class Bot {
     const now = performance.now();
     const wDef = WEAPONS[this.weaponKey];
 
+    // Reaction delay: wait before first shot after seeing target
+    if (now - this.targetSeenAt < 500) return;
+
     if (now < this.reloadUntil) return;
     if (this.ammo <= 0) {
-      this.reloadUntil = now + wDef.reload * 1000;
+      this.reloadUntil = now + wDef.reload * 1000 * 1.3;  // slower reload
       this.ammo = wDef.clip;
       return;
     }
 
-    const cd = 60000 / wDef.rpm;
+    // Effective fire rate is slower than the base weapon
+    const cd = (60000 / wDef.rpm) * 1.45;
     if (now - this.lastFire < cd) return;
-    // reaction delay by difficulty
     this.lastFire = now;
     this.ammo--;
 
@@ -220,8 +229,8 @@ export class Bot {
       ? this.target.eyePos.clone().sub(origin).normalize()
       : this.target.position.clone().sub(origin).normalize();
 
-    // aim error
-    const err = (0.05 / this.difficulty) + wDef.spread;
+    // Aim error is big so the bots aren't laser-accurate
+    const err = (0.11 / this.difficulty) + wDef.spread;
     dir.x += (Math.random() - 0.5) * err;
     dir.y += (Math.random() - 0.5) * err;
     dir.z += (Math.random() - 0.5) * err;
