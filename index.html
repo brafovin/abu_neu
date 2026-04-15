@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>Abu Neu — Build &amp; Battle</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="game-root">
+    <canvas id="game-canvas"></canvas>
+
+    <!-- In-game HUD -->
+    <div id="hud" class="hidden">
+      <div id="crosshair"></div>
+
+      <div id="stats">
+        <div class="bar">
+          <span class="label">SCHILD</span>
+          <div class="bar-bg"><div id="shield-fill" class="bar-fill shield"></div></div>
+          <span id="shield-text">100</span>
+        </div>
+        <div class="bar">
+          <span class="label">LEBEN</span>
+          <div class="bar-bg"><div id="health-fill" class="bar-fill health"></div></div>
+          <span id="health-text">100</span>
+        </div>
+      </div>
+
+      <div id="weapon-info">
+        <div id="weapon-name">Pistole</div>
+        <div id="ammo">12 / 48</div>
+      </div>
+
+      <div id="mats">
+        <div class="mat"><span class="mat-icon wood"></span><span id="wood-count">200</span></div>
+      </div>
+
+      <div id="hotbar">
+        <div class="slot" data-slot="1"><span class="key">1</span><span class="name">Pistole</span></div>
+        <div class="slot" data-slot="2"><span class="key">2</span><span class="name">Sturmgewehr</span></div>
+        <div class="slot" data-slot="3"><span class="key">3</span><span class="name">Schrotflinte</span></div>
+        <div class="slot" data-slot="4"><span class="key">4</span><span class="name">Sniper</span></div>
+        <div class="slot" data-slot="5"><span class="key">5</span><span class="name">Spitzhacke</span></div>
+        <div class="slot build" data-slot="6"><span class="key">Q</span><span class="name">Wand</span></div>
+        <div class="slot build" data-slot="7"><span class="key">F</span><span class="name">Boden</span></div>
+        <div class="slot build" data-slot="8"><span class="key">C</span><span class="name">Rampe</span></div>
+      </div>
+
+      <div id="mode-info">
+        <div id="mode-title">Solo Showdown</div>
+        <div id="mode-status">Gegner: 0</div>
+      </div>
+
+      <div id="kill-feed"></div>
+    </div>
+
+    <!-- Main menu -->
+    <div id="menu" class="screen">
+      <div class="menu-inner">
+        <h1>ABU <span>NEU</span></h1>
+        <p class="tag">Build &amp; Battle — Fortnite-inspiriertes Browser-Spiel</p>
+
+        <div class="modes">
+          <button class="mode-btn" data-mode="solo">
+            <h3>Solo Showdown</h3>
+            <p>Du gegen 9 Bots. Letzter lebender gewinnt. Loot, baue, kämpfe.</p>
+          </button>
+          <button class="mode-btn" data-mode="waves">
+            <h3>Wellen-Überleben</h3>
+            <p>Immer stärkere Bot-Wellen. Wie lange überlebst du?</p>
+          </button>
+          <button class="mode-btn" data-mode="sandbox">
+            <h3>Bau-Sandbox</h3>
+            <p>Unbegrenzte Ressourcen. Bauen &amp; Schießen üben.</p>
+          </button>
+          <button class="mode-btn" data-mode="tdm">
+            <h3>Team-Deathmatch</h3>
+            <p>Du + 2 Allys gegen 4 Gegner-Bots. 20 Kills zum Sieg.</p>
+          </button>
+        </div>
+
+        <div class="controls-hint">
+          <h4>Steuerung</h4>
+          <div class="grid">
+            <div><b>WASD</b> Bewegen</div>
+            <div><b>Maus</b> Umsehen</div>
+            <div><b>Leertaste</b> Springen</div>
+            <div><b>Shift</b> Sprinten</div>
+            <div><b>Linke Maus</b> Schießen / Bauen</div>
+            <div><b>Rechte Maus</b> Zielen</div>
+            <div><b>1-5</b> Waffen</div>
+            <div><b>Q/F/C</b> Wand/Boden/Rampe</div>
+            <div><b>R</b> Nachladen</div>
+            <div><b>G</b> Bau-Modus</div>
+            <div><b>ESC</b> Pause</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pause screen -->
+    <div id="pause" class="screen hidden">
+      <div class="menu-inner small">
+        <h2>Pause</h2>
+        <button id="btn-resume">Weiter</button>
+        <button id="btn-menu">Hauptmenü</button>
+      </div>
+    </div>
+
+    <!-- End screen -->
+    <div id="end" class="screen hidden">
+      <div class="menu-inner small">
+        <h2 id="end-title">Du hast gewonnen!</h2>
+        <p id="end-stats"></p>
+        <button id="btn-again">Nochmal</button>
+        <button id="btn-end-menu">Hauptmenü</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+      }
+    }
+  </script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
