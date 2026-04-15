@@ -54,6 +54,11 @@
       </div>
 
       <div id="kill-feed"></div>
+
+      <div id="mp-info" class="hidden">
+        <span>Room: <span class="code" id="mp-code"></span></span>
+        <span id="mp-peers"></span>
+      </div>
     </div>
 
     <!-- Main menu -->
@@ -78,6 +83,10 @@
           <button class="mode-btn" data-mode="tdm">
             <h3>Team-Deathmatch</h3>
             <p>Du + 2 Allys gegen 4 Gegner-Bots. 20 Kills zum Sieg.</p>
+          </button>
+          <button class="mode-btn" id="btn-online-mode">
+            <h3>Online mit Freunden</h3>
+            <p>Peer-to-peer Multiplayer. Hoste eine Lobby oder tritt mit einem Code bei.</p>
           </button>
         </div>
 
@@ -104,6 +113,36 @@
             <div><b>ESC</b> Pause</div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Online lobby screen -->
+    <div id="lobby" class="screen hidden">
+      <div class="menu-inner small">
+        <h2>Online Battle</h2>
+        <p class="tag">Peer-to-peer — kein Server nötig</p>
+
+        <div class="lobby-section">
+          <button id="btn-host">Lobby hosten</button>
+          <div id="host-info" class="hidden">
+            <p>Dein Room-Code:</p>
+            <div id="room-code"></div>
+            <button id="btn-copy-code" class="ghost-btn">Kopieren</button>
+            <p class="small-hint">Teile den Code mit Freunden, dann startest du.</p>
+            <button id="btn-start-host">Spiel starten</button>
+          </div>
+        </div>
+
+        <div class="lobby-divider">oder</div>
+
+        <div class="lobby-section">
+          <p>Trete einer Lobby bei:</p>
+          <input id="join-code" type="text" placeholder="Room-Code einfügen" />
+          <button id="btn-join">Beitreten</button>
+          <div id="join-status" class="small-hint"></div>
+        </div>
+
+        <button id="btn-lobby-back" class="ghost-btn">Zurück</button>
       </div>
     </div>
 
@@ -134,6 +173,7 @@
       }
     }
   </script>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>

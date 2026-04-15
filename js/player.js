@@ -368,12 +368,16 @@ export class Player {
       return;
     }
 
-    // Place building on click
+    // Place building — Fortnite-style hold-to-place with ~140ms cooldown
     if (this.currentBuild) {
-      if (!this._firedThisClick) {
-        this._firedThisClick = true;
+      const now = performance.now();
+      if (now - (this._lastBuildAt || 0) >= 140) {
         const placed = buildSystem.tryPlace(this, this.currentBuild);
-        if (placed) this.wood -= 10;
+        if (placed) {
+          this.wood -= 10;
+          this.onBuild && this.onBuild(this.currentBuild, placed);
+        }
+        this._lastBuildAt = now;
       }
       return;
     }

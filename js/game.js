@@ -4,6 +4,7 @@ import { Player } from './player.js';
 import { BuildSystem } from './building.js';
 import { Bot, rayVsAABB } from './bot.js';
 import { WEAPONS } from './weapons.js';
+import { RemotePlayer } from './remote_player.js';
 
 /** Game orchestrates world, player, bots, bullets, HUD. */
 export class Game {
@@ -15,6 +16,12 @@ export class Game {
     this.stopped = false;
     this.startTime = performance.now();
     this.elapsed = 0;
+
+    // Network (may be null for offline modes)
+    this.network = hooks.network || null;
+    this.isOnline = !!(this.network && this.network.isOnline);
+    this.remotePlayers = new Map();   // peerId -> RemotePlayer
+    this._lastNetSend = 0;
 
     // Renderer & scene
     this.renderer = new THREE.WebGLRenderer({
@@ -36,6 +43,7 @@ export class Game {
     this.player = new Player(this.camera, this.world);
     this.player.onFire = (origin, dir, wDef, shooter) =>
       this._fireHitscan(origin, dir, wDef, shooter);
+    this.player.onBuild = (kind, entry) => this._onLocalBuild(kind, entry);
 
     this.bots = [];
     this.allyBots = [];
@@ -158,8 +166,19 @@ export class Game {
 
   _configureMode() {
     this.wave = 0;
-    // Player faction
-    this.player.faction = 'player';
+    // Player faction (unique across peers in online mode)
+    this.player.faction = this.isOnline && this.network.myId
+      ? `peer_${this.network.myId}`
+      : 'player';
+
+    if (this.mode === 'online') {
+      // PvP only, no bots. Each peer simulates their own player;
+      // positions + fire + build events are broadcast.
+      this.ffa = true;
+      this.victoryCondition = () => false;
+      this._setupNetwork();
+      return;
+    }
 
     if (this.mode === 'solo') {
       // Battle royale style: every bot is their own faction → they
@@ -187,6 +206,157 @@ export class Game {
       this.enemyKills = 0;
       this.victoryCondition = () => this.teamKills >= 20 || this.enemyKills >= 20;
     }
+  }
+
+  _setupNetwork() {
+    if (!this.network) return;
+
+    this.network.onMessage   = (msg, from) => this._onNetMessage(msg, from);
+    this.network.onPeerJoin  = (peerId)     => this._onPeerJoin(peerId);
+    this.network.onPeerLeave = (peerId)     => this._onPeerLeave(peerId);
+
+    // Clients announce themselves; hosts wait for peers.
+    if (this.network.isClient) {
+      // Ask the host for the current state so we don't spawn on top of
+      // someone. Minimal: just send a hello.
+      this.network.broadcast({ type: 'hello', from: this.network.myId });
+    }
+    this._updateMpInfo();
+  }
+
+  _onPeerJoin(peerId) {
+    if (!this.remotePlayers.has(peerId)) {
+      const rp = new RemotePlayer(this.scene, peerId);
+      this.remotePlayers.set(peerId, rp);
+    }
+    this._pushKillFeed(`${peerId.slice(0, 6)} ist beigetreten`);
+    this._updateMpInfo();
+  }
+
+  _onPeerLeave(peerId) {
+    const rp = this.remotePlayers.get(peerId);
+    if (rp) {
+      rp.destroy();
+      this.remotePlayers.delete(peerId);
+    }
+    this._pushKillFeed(`${peerId.slice(0, 6)} hat verlassen`);
+    this._updateMpInfo();
+
+    // If client loses the host, end the game.
+    if (this.network.isClient && peerId === this.network.hostId) {
+      this._endGame(false);
+    }
+  }
+
+  _onNetMessage(msg, from) {
+    if (!msg || typeof msg !== 'object') return;
+
+    switch (msg.type) {
+      case 'hello': {
+        // Make sure we have a RemotePlayer for this peer
+        if (from && !this.remotePlayers.has(from)) {
+          const rp = new RemotePlayer(this.scene, from);
+          this.remotePlayers.set(from, rp);
+          this._updateMpInfo();
+        }
+        break;
+      }
+      case 'state': {
+        const rp = this.remotePlayers.get(msg.id);
+        if (rp) rp.applyState(msg);
+        break;
+      }
+      case 'fire': {
+        // Render tracer for remote shots
+        if (msg.origin && msg.dir && msg.weapon) {
+          const wDef = WEAPONS[msg.weapon];
+          if (wDef) {
+            const origin = new THREE.Vector3(...msg.origin);
+            const dir    = new THREE.Vector3(...msg.dir).normalize();
+            this._spawnTracer(origin, dir, wDef);
+          }
+        }
+        break;
+      }
+      case 'build': {
+        if (msg.kind && msg.center && typeof msg.yaw === 'number') {
+          this.builds.placeFromNetwork(msg.kind, msg.center, msg.yaw);
+        }
+        break;
+      }
+      case 'buildBreak': {
+        // Nearest matching placed build is removed
+        this._findBuildAt(msg.center, (b) => {
+          this.builds.damage(b, 9999);
+        });
+        break;
+      }
+      case 'damage': {
+        // Only act if the damage is addressed to us
+        if (msg.toId && msg.toId === this.network.myId) {
+          this.player.takeDamage(msg.amount || 0);
+          if (!this.player.alive) {
+            this._pushKillFeed('Du wurdest eliminiert');
+          }
+        }
+        break;
+      }
+      case 'kill': {
+        this._pushKillFeed(msg.text || '');
+        break;
+      }
+      default: break;
+    }
+  }
+
+  _findBuildAt(centerArr, cb) {
+    for (const b of this.builds.placed) {
+      if (Math.abs(b.center.x - centerArr[0]) < 0.1 &&
+          Math.abs(b.center.y - centerArr[1]) < 0.1 &&
+          Math.abs(b.center.z - centerArr[2]) < 0.1) {
+        cb(b);
+        return;
+      }
+    }
+  }
+
+  _onLocalBuild(kind, entry) {
+    if (!this.isOnline) return;
+    this.network.broadcast({
+      type:  'build',
+      id:    this.network.myId,
+      kind,
+      center: [entry.center.x, entry.center.y, entry.center.z],
+      yaw:   entry.yaw,
+    });
+  }
+
+  _sendStateTick() {
+    if (!this.isOnline || !this.network.isOnline) return;
+    const now = performance.now();
+    if (now - this._lastNetSend < 50) return;   // 20 Hz
+    this._lastNetSend = now;
+    this.network.broadcast({
+      type:  'state',
+      id:    this.network.myId,
+      pos:   [this.player.position.x, this.player.position.y, this.player.position.z],
+      yaw:   this.player.yaw,
+      pitch: this.player.pitch,
+      health: this.player.health,
+      shield: this.player.shield,
+      alive:  this.player.alive,
+    });
+  }
+
+  _updateMpInfo() {
+    const el = document.getElementById('mp-info');
+    if (!el) return;
+    if (!this.isOnline) { el.classList.add('hidden'); return; }
+    el.classList.remove('hidden');
+    const code = this.network.hostId || '';
+    document.getElementById('mp-code').textContent = code;
+    document.getElementById('mp-peers').textContent =
+      `   ·   Spieler: ${this.remotePlayers.size + 1}`;
   }
 
   _spawnWave() {
@@ -227,6 +397,14 @@ export class Game {
     window.removeEventListener('resize', this._resize);
     this._unbindInput && this._unbindInput();
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+    if (this.network) {
+      // Hand off lifecycle; main.js decides whether to keep the peer alive.
+      this.network.onMessage = () => {};
+      this.network.onPeerJoin = () => {};
+      this.network.onPeerLeave = () => {};
+    }
+    const mp = document.getElementById('mp-info');
+    if (mp) mp.classList.add('hidden');
     // dispose scene
     this.renderer.dispose();
     this.scene.traverse(o => {
@@ -279,6 +457,12 @@ export class Game {
     for (const b of this.bots) b.update(dt, ctx);
     for (const b of this.allyBots) b.update(dt, ctx);
 
+    // Update remote players (interpolation)
+    for (const rp of this.remotePlayers.values()) rp.update(dt);
+
+    // Sync my state to peers
+    this._sendStateTick();
+
     // Update bullets (tracers)
     this._updateBullets(dt);
 
@@ -326,6 +510,17 @@ export class Game {
     // Draw tracer
     this._spawnTracer(origin, dir, wDef);
 
+    // Broadcast my own fire events to peers so they see the tracer
+    if (this.isOnline && shooter === this.player) {
+      this.network.broadcast({
+        type:   'fire',
+        id:     this.network.myId,
+        origin: [origin.x, origin.y, origin.z],
+        dir:    [dir.x, dir.y, dir.z],
+        weapon: this.player.currentWeapon,
+      });
+    }
+
     const shooterFaction = shooter && shooter.faction;
 
     // Collect candidate targets that are NOT shooter and NOT same faction
@@ -343,6 +538,12 @@ export class Game {
       if (!b.alive || b === shooter) continue;
       if (b.faction === shooterFaction) continue;
       targets.push({ kind: 'ally', obj: b, aabb: b.getAABB() });
+    }
+    // Remote players (online mode)
+    for (const rp of this.remotePlayers.values()) {
+      if (!rp.alive) continue;
+      if (rp.faction === shooterFaction) continue;
+      targets.push({ kind: 'remote', obj: rp, aabb: rp.getAABB() });
     }
 
     // Find first hit (target or environment)
@@ -383,6 +584,21 @@ export class Game {
       const head = obj.eyePos ? obj.eyePos.y : obj.position.y + 1.5;
       if (Math.abs(hitY - head) < 0.35) dmg *= 1.8;
 
+      // Remote players: visual feedback only locally, real damage
+      // is applied on their machine via a network event.
+      if (bestHit.target.kind === 'remote') {
+        obj.takeDamage(dmg);
+        if (this.isOnline && shooter === this.player) {
+          this.network.broadcast({
+            type:   'damage',
+            toId:   obj.id,
+            amount: dmg,
+            fromId: this.network.myId,
+          });
+        }
+        return;
+      }
+
       obj.takeDamage(dmg);
 
       if (bestHit.target.kind === 'player' && !obj.alive) {
@@ -409,8 +625,7 @@ export class Game {
         this.player.addWood(reward);
         // Loot crate drops bonus
         if (bestHit.collider.loot) {
-          this._grantLoot(bestHit.collider.loot);
-          this._pushKillFeed('Kiste geöffnet!');
+          this._grantLoot(bestHit.collider);
         }
       }
     } else if (bestHit.type === 'build') {
@@ -418,18 +633,33 @@ export class Game {
     }
   }
 
-  _grantLoot(kind) {
+  _grantLoot(crate) {
+    const kind = crate.loot;
     if (kind === 'shield') {
       this.player.shield = Math.min(this.player.maxShield, this.player.shield + 40);
+      this._pushKillFeed('Kiste: +40 Schild');
     } else if (kind === 'health') {
       this.player.health = Math.min(this.player.maxHealth, this.player.health + 40);
+      this._pushKillFeed('Kiste: +40 Leben');
     } else if (kind === 'ammo') {
-      // refill reserve for all weapons
       for (const k of Object.keys(this.player.inventory)) {
         this.player.inventory[k].reserve += 40;
       }
+      this._pushKillFeed('Kiste: +Munition');
     } else if (kind === 'wood') {
       this.player.addWood(80);
+      this._pushKillFeed('Kiste: +80 Holz');
+    } else if (kind === 'weapon') {
+      const wkey = crate.weaponKey;
+      if (wkey && WEAPONS[wkey]) {
+        const wDef = WEAPONS[wkey];
+        const inv = this.player.inventory[wkey];
+        inv.ammo = wDef.clip;
+        inv.reserve = wDef.reserve;
+        this.player.selectWeapon(wkey);
+        this._pushKillFeed(`Kiste: ${wDef.name}!`);
+        this._updateHotbar();
+      }
     }
   }
 
@@ -507,6 +737,7 @@ export class Game {
       waves: 'Wellen-Überleben',
       sandbox: 'Bau-Sandbox',
       tdm: 'Team-Deathmatch',
+      online: 'Online Battle',
     };
     document.getElementById('mode-title').textContent = modeTitles[this.mode];
     let status = '';
@@ -515,6 +746,7 @@ export class Game {
     else if (this.mode === 'waves') status = `Welle ${this.wave} · Gegner: ${aliveEnemies}`;
     else if (this.mode === 'sandbox') status = `Kills: ${this.player.kills}`;
     else if (this.mode === 'tdm') status = `Team ${this.teamKills} – ${this.enemyKills} Feinde`;
+    else if (this.mode === 'online') status = `Spieler: ${this.remotePlayers.size + 1} · Kills: ${this.player.kills}`;
     document.getElementById('mode-status').textContent = status;
 
     this._updateHotbar();

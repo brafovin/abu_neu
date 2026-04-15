@@ -161,19 +161,24 @@ export class World {
   }
 
   _scatterLootCrates(n) {
-    const types = ['shield', 'health', 'ammo', 'wood'];
+    const types = ['shield', 'health', 'ammo', 'wood', 'weapon', 'weapon'];
     const colors = {
       shield: 0x4fc3f7,
       health: 0xef5350,
       ammo:   0xffd54f,
       wood:   0xa0744a,
+      weapon: 0xab47bc,
     };
+    const weaponPool = ['rifle', 'shotgun', 'sniper', 'pistol'];
 
     for (let i = 0; i < n; i++) {
       const x = (Math.random() - 0.5) * (this.size - 30);
       const z = (Math.random() - 0.5) * (this.size - 30);
       const y = this.groundHeight(x, z);
       const loot = types[Math.floor(Math.random() * types.length)];
+      const weaponKey = loot === 'weapon'
+        ? weaponPool[Math.floor(Math.random() * weaponPool.length)]
+        : null;
 
       const group = new THREE.Group();
 
@@ -196,6 +201,16 @@ export class World {
       lid.position.y = 1.25;
       group.add(lid);
 
+      // Small marker on weapon crates
+      if (loot === 'weapon') {
+        const marker = new THREE.Mesh(
+          new THREE.BoxGeometry(0.2, 0.6, 0.1),
+          new THREE.MeshLambertMaterial({ color: 0x222, emissive: 0xab47bc, emissiveIntensity: 0.3 })
+        );
+        marker.position.y = 1.6;
+        group.add(marker);
+      }
+
       group.position.set(x, y, z);
       this.scene.add(group);
 
@@ -208,6 +223,7 @@ export class World {
         hp: 40,
         reward: 15,
         loot,                    // marker used by game.js
+        weaponKey,               // only set when loot === 'weapon'
         mesh: group,
       });
     }

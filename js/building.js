@@ -86,29 +86,45 @@ export class BuildSystem {
 
   /**
    * Compute the mesh position for a new build at (player, kind).
-   * Note: for ramps the mesh origin is at the BASE, not the center.
+   * Fortnite-style: placement is close to the player and snapped to
+   * the 4x4 grid. Note: for ramps the mesh origin is at the BASE.
    */
   _computePlacement(player, kind) {
-    const fwd = player.forwardVector().clone();
-    const pos = player.eyePos.clone().add(fwd.multiplyScalar(5));
-    const cx = this._snap(pos.x);
-    const cz = this._snap(pos.z);
-    const groundY = this.world.groundHeight(cx, cz);
+    const fwd2D = new THREE.Vector3(
+      -Math.sin(player.yaw), 0, -Math.cos(player.yaw)
+    ).normalize();
+
+    const anchor = player.position;
+    const snapY = (y) => Math.round(y / GRID) * GRID;
 
     if (kind === 'floor') {
-      return new THREE.Vector3(cx, this._snap(pos.y), cz);
-    }
-    if (kind === 'roof') {
-      return new THREE.Vector3(cx, groundY + GRID, cz);
+      // Floor 1 grid ahead of the player, at the nearest grid level
+      const p = anchor.clone().add(fwd2D.clone().multiplyScalar(GRID * 0.6));
+      const baseY = Math.floor((player.position.y + 0.2) / GRID) * GRID;
+      return new THREE.Vector3(this._snap(p.x), baseY, this._snap(p.z));
     }
     if (kind === 'wall') {
-      return new THREE.Vector3(cx, groundY + GRID / 2, cz);
+      // Wall on the grid cell about half a tile in front of the player
+      const p = anchor.clone().add(fwd2D.clone().multiplyScalar(GRID * 0.5));
+      const baseY = Math.floor((player.position.y + 0.2) / GRID) * GRID;
+      return new THREE.Vector3(this._snap(p.x), baseY + GRID / 2, this._snap(p.z));
     }
     if (kind === 'ramp') {
-      // Mesh origin at base — ramp rises from groundY to groundY + GRID
-      return new THREE.Vector3(cx, groundY, cz);
+      // Ramp starts roughly at the player's feet, extending forward
+      const p = anchor.clone().add(fwd2D.clone().multiplyScalar(GRID * 0.4));
+      const baseY = Math.floor((player.position.y + 0.2) / GRID) * GRID;
+      return new THREE.Vector3(this._snap(p.x), baseY, this._snap(p.z));
     }
-    return new THREE.Vector3(cx, groundY, cz);
+    if (kind === 'roof') {
+      // Roof above player's current grid cell, one wall-height up
+      const baseY = Math.floor((player.position.y + 0.2) / GRID) * GRID;
+      return new THREE.Vector3(
+        this._snap(anchor.x),
+        baseY + GRID,
+        this._snap(anchor.z),
+      );
+    }
+    return new THREE.Vector3(this._snap(anchor.x), anchor.y, this._snap(anchor.z));
   }
 
   /**
@@ -175,10 +191,10 @@ export class BuildSystem {
   }
 
   tryPlace(player, kind) {
-    if (player.wood < 10) return false;
+    if (player.wood < 10) return null;
     const c = this._computePlacement(player, kind);
     const yaw = this._snapYaw(player.yaw);
-    if (!this._canPlace(kind, c, yaw)) return false;
+    if (!this._canPlace(kind, c, yaw)) return null;
 
     const mat = new THREE.MeshLambertMaterial({ color: 0xbb8855 });
     let mesh;
@@ -192,7 +208,7 @@ export class BuildSystem {
       mesh = new THREE.Mesh(makeRampGeometry(), mat);
       mesh.rotation.y = yaw;
     } else {
-      return false;
+      return null;
     }
 
     mesh.position.copy(c);
@@ -210,7 +226,41 @@ export class BuildSystem {
       center: c.clone(),
     };
     this.placed.push(entry);
-    return true;
+    return entry;
+  }
+
+  /**
+   * Place a build from network data (no cost, no player needed).
+   * Used when receiving build events from remote players.
+   */
+  placeFromNetwork(kind, centerArr, yaw) {
+    const c = new THREE.Vector3(...centerArr);
+    if (!this._canPlace(kind, c, yaw)) return null;
+
+    const mat = new THREE.MeshLambertMaterial({ color: 0xbb8855 });
+    let mesh;
+    if (kind === 'wall') {
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(GRID, GRID, WALL_THICK), mat);
+      mesh.rotation.y = yaw;
+    } else if (kind === 'floor' || kind === 'roof') {
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(GRID, FLOOR_THICK, GRID), mat);
+    } else if (kind === 'ramp') {
+      mesh = new THREE.Mesh(makeRampGeometry(), mat);
+      mesh.rotation.y = yaw;
+    } else {
+      return null;
+    }
+
+    mesh.position.copy(c);
+    this.scene.add(mesh);
+    const aabb = this._computeAABB(kind, c, yaw);
+    const entry = {
+      min: aabb.min, max: aabb.max,
+      mesh, hp: 150, kind, yaw,
+      center: c.clone(),
+    };
+    this.placed.push(entry);
+    return entry;
   }
 
   /**
